@@ -34,6 +34,50 @@ function verifyShopifyWebhook(rawBody, hmacHeader, secret) {
   return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(hmacHeader));
 }
 
+// ── Send an email via Brevo API ─────────────────────────────────────────────
+async function sendEmail({ to, toName, subject, htmlContent }) {
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "api-key": process.env.BREVO_API_KEY,
+    },
+    body: JSON.stringify({
+      sender: {
+        name: process.env.SENDER_NAME || "Referral System",
+        email: process.env.SENDER_EMAIL,
+      },
+      to: [{ email: to, name: toName }],
+      subject,
+      htmlContent,
+    }),
+  });
+
+  if (!response.ok) {
+    const errText = await response.text();
+    throw new Error(`Brevo send failed: ${response.status} ${errText}`);
+  }
+  return response.json();
+}
+
+// ── Build "order paid" notification email ───────────────────────────────────
+function buildOrderPaidEmailHtml({ doctorName, orderNumber, orderValue, referralRate, payoutAmount, customerName }) {
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+      <h2>New Referral Order Placed</h2>
+      <p>An order has been placed using referral code for <strong>Dr. ${doctorName}</strong>.</p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Order</strong></td><td style="padding:8px;border:1px solid #ddd;">${orderNumber}</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Customer</strong></td><td style="padding:8px;border:1px solid #ddd;">${customerName || "N/A"}</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Order Value</strong></td><td style="padding:8px;border:1px solid #ddd;">₹${orderValue}</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Referral Rate</strong></td><td style="padding:8px;border:1px solid #ddd;">${referralRate}%</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Referral Amount</strong></td><td style="padding:8px;border:1px solid #ddd;">₹${payoutAmount}</td></tr>
+      </table>
+      <p style="color:#666;font-size:13px;">This referral amount will be eligible for payout 15 days after delivery is confirmed. This is an automated notification.</p>
+    </div>
+  `;
+}
+
 // ── Main handler ─────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
   if (req.method !== "POST") {
@@ -67,7 +111,7 @@ export default async function handler(req, res) {
   // 5. Look up doctor by discount code
   const { data: doctor, error: doctorError } = await supabase
     .from("doctors")
-    .select("id, name, referral_rate")
+    .select("id, name, email, referral_rate, mr_name, mr_email")
     .eq("discount_code", usedCode)
     .eq("active", true)
     .single();
@@ -104,6 +148,46 @@ export default async function handler(req, res) {
   console.log(
     `Referral logged — Doctor: ${doctor.name}, Order: ${order.name}, Value: ${orderValue}`
   );
+
+  // 8. Calculate payout amount for the email (same formula as DB generated column)
+  const payoutAmount = Math.round(orderValue * doctor.referral_rate) / 100;
+
+  const emailHtml = buildOrderPaidEmailHtml({
+    doctorName: doctor.name,
+    orderNumber: order.name,
+    orderValue,
+    referralRate: doctor.referral_rate,
+    payoutAmount,
+    customerName,
+  });
+
+  // 9. Email the doctor (best-effort — don't fail the webhook if email fails)
+  try {
+    if (doctor.email) {
+      await sendEmail({
+        to: doctor.email,
+        toName: doctor.name,
+        subject: `New Referral Order — ${order.name}`,
+        htmlContent: emailHtml,
+      });
+    }
+  } catch (err) {
+    console.error("Doctor order-paid email failed:", err);
+  }
+
+  // 10. Email the MR (if one is linked to this doctor)
+  try {
+    if (doctor.mr_email) {
+      await sendEmail({
+        to: doctor.mr_email,
+        toName: doctor.mr_name || "MR",
+        subject: `New Referral Order for Dr. ${doctor.name} — ${order.name}`,
+        htmlContent: emailHtml,
+      });
+    }
+  } catch (err) {
+    console.error("MR order-paid email failed:", err);
+  }
 
   return res.status(200).json({ message: "Referral logged successfully" });
 }
