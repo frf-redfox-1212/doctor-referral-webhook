@@ -108,11 +108,24 @@ export default async function handler(req, res) {
 
   const usedCode = discountCodes[0].code.toUpperCase().trim();
 
-  // 5. Look up doctor by discount code
+  // 5. Look up the code in doctor_codes, then get the linked doctor
+  const { data: codeRow, error: codeError } = await supabase
+    .from("doctor_codes")
+    .select("doctor_id")
+    .eq("discount_code", usedCode)
+    .eq("active", true)
+    .single();
+
+  if (codeError || !codeRow) {
+    // Code doesn't exist or isn't active — not a doctor referral, ignore
+    console.log(`No active doctor code found for: ${usedCode}`);
+    return res.status(200).json({ message: "Code not a doctor referral, skipping" });
+  }
+
   const { data: doctor, error: doctorError } = await supabase
     .from("doctors")
     .select("id, name, email, referral_rate, mr_name, mr_email")
-    .eq("discount_code", usedCode)
+    .eq("id", codeRow.doctor_id)
     .eq("active", true)
     .single();
 
