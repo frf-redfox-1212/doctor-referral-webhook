@@ -61,17 +61,19 @@ async function sendEmail({ to, toName, subject, htmlContent }) {
 }
 
 // ── Build "order paid" notification email ───────────────────────────────────
-function buildOrderPaidEmailHtml({ doctorName, orderNumber, orderValue, referralRate, payoutAmount, customerName }) {
+function buildOrderPaidEmailHtml({ recipientRole, doctorName, orderNumber, untaxedAmount, rate, payoutAmount, customerName, orderType }) {
+  const orderTypeLabel = orderType === "first" ? "First order (code used)" : "Repeat order (no code needed)";
   return `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-      <h2>New Referral Order Placed</h2>
-      <p>An order has been placed using referral code for <strong>Dr. ${doctorName}</strong>.</p>
+      <h2>New Referral Order — ${recipientRole}</h2>
+      <p>An order has been placed for <strong>Dr. ${doctorName}</strong>'s patient.</p>
       <table style="width:100%;border-collapse:collapse;margin:16px 0;">
         <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Order</strong></td><td style="padding:8px;border:1px solid #ddd;">${orderNumber}</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Order Type</strong></td><td style="padding:8px;border:1px solid #ddd;">${orderTypeLabel}</td></tr>
         <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Customer</strong></td><td style="padding:8px;border:1px solid #ddd;">${customerName || "N/A"}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Order Value</strong></td><td style="padding:8px;border:1px solid #ddd;">₹${orderValue}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Referral Rate</strong></td><td style="padding:8px;border:1px solid #ddd;">${referralRate}%</td></tr>
-        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Referral Amount</strong></td><td style="padding:8px;border:1px solid #ddd;">₹${payoutAmount}</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Order Value (untaxed)</strong></td><td style="padding:8px;border:1px solid #ddd;">₹${untaxedAmount}</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Your Rate</strong></td><td style="padding:8px;border:1px solid #ddd;">${rate}%</td></tr>
+        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Your Referral Amount</strong></td><td style="padding:8px;border:1px solid #ddd;">₹${payoutAmount}</td></tr>
       </table>
       <p style="color:#666;font-size:13px;">This referral amount will be eligible for payout 15 days after delivery is confirmed. This is an automated notification.</p>
     </div>
@@ -99,58 +101,142 @@ export default async function handler(req, res) {
   // 3. Parse order data
   const order = JSON.parse(rawBody);
 
-  // 4. Find discount code used (if any)
-  const discountCodes = order.discount_codes || [];
-  if (discountCodes.length === 0) {
-    // No discount code used — not a referral order, ignore
-    return res.status(200).json({ message: "No discount code, skipping" });
-  }
-
-  const usedCode = discountCodes[0].code.toUpperCase().trim();
-
-  // 5. Look up the code in doctor_codes, then get the linked doctor
-  const { data: codeRow, error: codeError } = await supabase
-    .from("doctor_codes")
-    .select("doctor_id")
-    .eq("discount_code", usedCode)
-    .eq("active", true)
-    .single();
-
-  if (codeError || !codeRow) {
-    // Code doesn't exist or isn't active — not a doctor referral, ignore
-    console.log(`No active doctor code found for: ${usedCode}`);
-    return res.status(200).json({ message: "Code not a doctor referral, skipping" });
-  }
-
-  const { data: doctor, error: doctorError } = await supabase
-    .from("doctors")
-    .select("id, name, email, referral_rate, mr_name, mr_email")
-    .eq("id", codeRow.doctor_id)
-    .eq("active", true)
-    .single();
-
-  if (doctorError || !doctor) {
-    // Code used doesn't belong to any doctor — ignore
-    console.log(`No active doctor found for code: ${usedCode}`);
-    return res.status(200).json({ message: "Code not a doctor referral, skipping" });
-  }
-
-  // 6. Extract order details
-  const orderValue = parseFloat(order.total_price);
-  const customerEmail = order.email || "";
+  // 4. Basic order details
+  const customerEmail = (order.email || "").toLowerCase().trim();
   const customerName =
     `${order.billing_address?.first_name || ""} ${order.billing_address?.last_name || ""}`.trim();
+  const untaxedAmount = parseFloat(order.subtotal_price); // after discount, before tax/shipping
+  const orderValue = parseFloat(order.total_price);
 
-  // 7. Log referral to Supabase
+  if (!customerEmail) {
+    return res.status(200).json({ message: "No customer email on order, skipping" });
+  }
+
+  const discountCodes = order.discount_codes || [];
+  const usedCode = discountCodes.length > 0
+    ? discountCodes[0].code.toUpperCase().trim()
+    : null;
+
+  let doctor, mrRate, doctorRate, orderType, customerLinkId, codeRow;
+
+  // ── Try the code path first (if a code was used) ──────────────────────────
+  if (usedCode) {
+    const { data: foundCode } = await supabase
+      .from("doctor_codes")
+      .select("*")
+      .eq("discount_code", usedCode)
+      .eq("active", true)
+      .single();
+
+    const codeIsUsable =
+      foundCode &&
+      !foundCode.discount_used &&
+      new Date(foundCode.valid_until) > new Date();
+
+    if (codeIsUsable) {
+      codeRow = foundCode;
+    }
+  }
+
+  if (codeRow) {
+    // ── FIRST ORDER: valid, unused code ──────────────────────────────────────
+    const { data: foundDoctor, error: doctorError } = await supabase
+      .from("doctors")
+      .select("id, name, email, mr_name, mr_email")
+      .eq("id", codeRow.doctor_id)
+      .eq("active", true)
+      .single();
+
+    if (doctorError || !foundDoctor) {
+      console.log(`Code ${usedCode} has no active doctor, skipping`);
+      return res.status(200).json({ message: "Code has no active doctor, skipping" });
+    }
+
+    doctor = foundDoctor;
+    mrRate = codeRow.mr_referral_rate;
+    doctorRate = codeRow.doctor_referral_rate;
+    orderType = "first";
+
+    // Create the customer link so future orders (no code) still pay out
+    const { data: link, error: linkError } = await supabase
+      .from("customer_links")
+      .insert({
+        customer_email: customerEmail,
+        doctor_id: doctor.id,
+        doctor_code_id: codeRow.id,
+        mr_referral_rate: mrRate,
+        doctor_referral_rate: doctorRate,
+        expires_at: codeRow.valid_until,
+      })
+      .select()
+      .single();
+
+    if (linkError) {
+      console.error("Failed to create customer link:", linkError);
+    } else {
+      customerLinkId = link.id;
+    }
+
+    // Mark the code as used (one-time discount only)
+    await supabase
+      .from("doctor_codes")
+      .update({ discount_used: true })
+      .eq("id", codeRow.id);
+  } else {
+    // ── No usable code: check if this customer is already linked ────────────
+    const { data: activeLink } = await supabase
+      .from("customer_links")
+      .select("*")
+      .eq("customer_email", customerEmail)
+      .eq("active", true)
+      .gt("expires_at", new Date().toISOString())
+      .order("linked_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (!activeLink) {
+      // Not a referral order at all — ignore
+      return res.status(200).json({ message: "No active code or customer link, skipping" });
+    }
+
+    const { data: foundDoctor, error: doctorError } = await supabase
+      .from("doctors")
+      .select("id, name, email, mr_name, mr_email")
+      .eq("id", activeLink.doctor_id)
+      .eq("active", true)
+      .single();
+
+    if (doctorError || !foundDoctor) {
+      return res.status(200).json({ message: "Linked doctor inactive, skipping" });
+    }
+
+    doctor = foundDoctor;
+    mrRate = activeLink.mr_referral_rate;
+    doctorRate = activeLink.doctor_referral_rate;
+    orderType = "repeat";
+    customerLinkId = activeLink.id;
+  }
+
+  // 5. Calculate split payouts (on untaxed amount)
+  const mrPayoutAmount = Math.round(untaxedAmount * mrRate) / 100;
+  const doctorPayoutAmount = Math.round(untaxedAmount * doctorRate) / 100;
+
+  // 6. Log referral to Supabase
   const { error: insertError } = await supabase.from("referrals").insert({
     doctor_id: doctor.id,
     shopify_order_id: String(order.id),
-    shopify_order_number: order.name,       // e.g. "#1042"
+    shopify_order_number: order.name,
     customer_email: customerEmail,
     customer_name: customerName,
     order_value: orderValue,
-    referral_rate: doctor.referral_rate,    // snapshot current rate
     discount_code: usedCode,
+    customer_link_id: customerLinkId,
+    order_type: orderType,
+    untaxed_amount: untaxedAmount,
+    mr_referral_rate: mrRate,
+    doctor_referral_rate: doctorRate,
+    mr_payout_amount: mrPayoutAmount,
+    doctor_payout_amount: doctorPayoutAmount,
   });
 
   if (insertError) {
@@ -159,48 +245,54 @@ export default async function handler(req, res) {
   }
 
   console.log(
-    `Referral logged — Doctor: ${doctor.name}, Order: ${order.name}, Value: ${orderValue}`
+    `Referral logged (${orderType}) — Doctor: ${doctor.name}, Order: ${order.name}, Untaxed: ${untaxedAmount}`
   );
 
-  // 8. Calculate payout amount for the email (same formula as DB generated column)
-  const payoutAmount = Math.round(orderValue * doctor.referral_rate) / 100;
-
-  const emailHtml = buildOrderPaidEmailHtml({
-    doctorName: doctor.name,
-    orderNumber: order.name,
-    orderValue,
-    referralRate: doctor.referral_rate,
-    payoutAmount,
-    customerName,
-  });
-
-  // 9. Email the doctor (best-effort — don't fail the webhook if email fails)
+  // 7. Email the doctor (best-effort — don't fail the webhook if email fails)
   try {
     if (doctor.email) {
       await sendEmail({
         to: doctor.email,
         toName: doctor.name,
         subject: `New Referral Order — ${order.name}`,
-        htmlContent: emailHtml,
+        htmlContent: buildOrderPaidEmailHtml({
+          recipientRole: "Doctor",
+          doctorName: doctor.name,
+          orderNumber: order.name,
+          untaxedAmount,
+          rate: doctorRate,
+          payoutAmount: doctorPayoutAmount,
+          customerName,
+          orderType,
+        }),
       });
     }
   } catch (err) {
     console.error("Doctor order-paid email failed:", err);
   }
 
-  // 10. Email the MR (if one is linked to this doctor)
+  // 8. Email the MR (if one is linked to this doctor)
   try {
     if (doctor.mr_email) {
       await sendEmail({
         to: doctor.mr_email,
         toName: doctor.mr_name || "MR",
         subject: `New Referral Order for Dr. ${doctor.name} — ${order.name}`,
-        htmlContent: emailHtml,
+        htmlContent: buildOrderPaidEmailHtml({
+          recipientRole: "MR",
+          doctorName: doctor.name,
+          orderNumber: order.name,
+          untaxedAmount,
+          rate: mrRate,
+          payoutAmount: mrPayoutAmount,
+          customerName,
+          orderType,
+        }),
       });
     }
   } catch (err) {
     console.error("MR order-paid email failed:", err);
   }
 
-  return res.status(200).json({ message: "Referral logged successfully" });
+  return res.status(200).json({ message: "Referral logged successfully", order_type: orderType });
 }
