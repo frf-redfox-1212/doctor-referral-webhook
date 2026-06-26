@@ -128,18 +128,29 @@ export default async function handler(req, res) {
       .eq("active", true)
       .single();
 
-    const codeIsUsable =
-      foundCode &&
-      !foundCode.discount_used &&
-      new Date(foundCode.valid_until) > new Date();
+    const codeIsActive =
+      foundCode && new Date(foundCode.valid_until) > new Date();
 
-    if (codeIsUsable) {
-      codeRow = foundCode;
+    if (codeIsActive) {
+      // Check if THIS specific email has already used THIS specific code before.
+      // Codes can be reused by different family members/emails — only blocked
+      // for the same email reusing the same code.
+      const { data: priorUseByThisEmail } = await supabase
+        .from("customer_links")
+        .select("id")
+        .eq("customer_email", customerEmail)
+        .eq("doctor_code_id", foundCode.id)
+        .limit(1)
+        .maybeSingle();
+
+      if (!priorUseByThisEmail) {
+        codeRow = foundCode;
+      }
     }
   }
 
   if (codeRow) {
-    // ── FIRST ORDER: valid, unused code ──────────────────────────────────────
+    // ── FIRST ORDER: valid code, not used before by this email ───────────────
     const { data: foundDoctor, error: doctorError } = await supabase
       .from("doctors")
       .select("id, name, email, mr_name, mr_email")
@@ -176,12 +187,6 @@ export default async function handler(req, res) {
     } else {
       customerLinkId = link.id;
     }
-
-    // Mark the code as used (one-time discount only)
-    await supabase
-      .from("doctor_codes")
-      .update({ discount_used: true })
-      .eq("id", codeRow.id);
   } else {
     // ── No usable code: check if this customer is already linked ────────────
     const { data: activeLink } = await supabase
