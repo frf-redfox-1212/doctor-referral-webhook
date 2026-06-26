@@ -113,7 +113,7 @@ export default async function handler(req, res) {
   }
 
   const discountCodes = order.discount_codes || [];
-  const usedCode = discountCodes.length > 0
+  let usedCode = discountCodes.length > 0
     ? discountCodes[0].code.toUpperCase().trim()
     : null;
 
@@ -215,6 +215,17 @@ export default async function handler(req, res) {
     doctorRate = activeLink.doctor_referral_rate;
     orderType = "repeat";
     customerLinkId = activeLink.id;
+
+    // Pull the original linking code's text for traceability (referrals.discount_code)
+    const { data: originalCode } = await supabase
+      .from("doctor_codes")
+      .select("discount_code")
+      .eq("id", activeLink.doctor_code_id)
+      .single();
+
+    if (originalCode) {
+      usedCode = originalCode.discount_code;
+    }
   }
 
   // 5. Calculate split payouts (on untaxed amount)
