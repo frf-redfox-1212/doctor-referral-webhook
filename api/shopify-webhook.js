@@ -105,8 +105,24 @@ export default async function handler(req, res) {
   const customerEmail = (order.email || "").toLowerCase().trim();
   const customerName =
     `${order.billing_address?.first_name || ""} ${order.billing_address?.last_name || ""}`.trim();
-  const untaxedAmount = parseFloat(order.subtotal_price); // after discount, before tax/shipping
+
+  // Shopify's subtotal_price reflects discount already, but if the store uses
+  // tax-inclusive pricing (taxes_included = true), that subtotal still has tax
+  // baked in. Subtract total_tax in that case to get the true untaxed amount.
+  const rawSubtotal = parseFloat(order.subtotal_price);
+  const totalTax = parseFloat(order.total_tax || "0");
+  const untaxedAmount = order.taxes_included
+    ? rawSubtotal - totalTax
+    : rawSubtotal;
+
   const orderValue = parseFloat(order.total_price);
+
+  // GST rate as a percentage (e.g. 18.00) — taken from Shopify's tax_lines.
+  // rate comes through as a decimal (0.18), so multiply by 100.
+  const taxLines = order.tax_lines || [];
+  const gstPercent = taxLines.length > 0
+    ? parseFloat(taxLines[0].rate) * 100
+    : null;
 
   if (!customerEmail) {
     return res.status(200).json({ message: "No customer email on order, skipping" });
@@ -249,6 +265,8 @@ export default async function handler(req, res) {
     customer_link_id: customerLinkId,
     order_type: orderType,
     untaxed_amount: untaxedAmount,
+    tax_amount: totalTax,
+    gst_percent: gstPercent,
     mr_referral_rate: mrRate,
     doctor_referral_rate: doctorRate,
     mr_payout_amount: mrPayoutAmount,
