@@ -93,10 +93,10 @@ export default async function handler(req, res) {
     });
   }
 
-  // 1. Get doctor + MR details
+  // 1. Get doctor + linked MR details (via mrs table)
   const { data: doctor, error: doctorError } = await supabase
     .from("doctors")
-    .select("id, name, email, mr_name, mr_email")
+    .select("id, name, email, mrs(name, email)")
     .eq("id", doctor_id)
     .single();
 
@@ -108,8 +108,8 @@ export default async function handler(req, res) {
   const payoutIdColumn = isDoctor ? "doctor_payout_id" : "mr_payout_id";
   const amountField = isDoctor ? "doctor_payout_amount" : "mr_payout_amount";
   const rateField = isDoctor ? "doctor_referral_rate" : "mr_referral_rate";
-  const recipientEmail = isDoctor ? doctor.email : doctor.mr_email;
-  const recipientName = isDoctor ? doctor.name : doctor.mr_name;
+  const recipientEmail = isDoctor ? doctor.email : doctor.mrs?.email;
+  const recipientName = isDoctor ? doctor.name : doctor.mrs?.name;
 
   if (!recipientEmail) {
     return res.status(400).json({ error: `No email on file for ${recipient_type}` });

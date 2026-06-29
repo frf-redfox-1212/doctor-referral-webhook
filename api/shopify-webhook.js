@@ -169,7 +169,7 @@ export default async function handler(req, res) {
     // ── FIRST ORDER: valid code, not used before by this email ───────────────
     const { data: foundDoctor, error: doctorError } = await supabase
       .from("doctors")
-      .select("id, name, email, mr_name, mr_email")
+      .select("id, name, email, mrs(name, email)")
       .eq("id", codeRow.doctor_id)
       .eq("active", true)
       .single();
@@ -222,7 +222,7 @@ export default async function handler(req, res) {
 
     const { data: foundDoctor, error: doctorError } = await supabase
       .from("doctors")
-      .select("id, name, email, mr_name, mr_email")
+      .select("id, name, email, mrs(name, email)")
       .eq("id", activeLink.doctor_id)
       .eq("active", true)
       .single();
@@ -307,10 +307,10 @@ export default async function handler(req, res) {
 
   // 8. Email the MR (if one is linked to this doctor)
   try {
-    if (doctor.mr_email) {
+    if (doctor.mrs?.email) {
       await sendEmail({
-        to: doctor.mr_email,
-        toName: doctor.mr_name || "MR",
+        to: doctor.mrs.email,
+        toName: doctor.mrs.name || "MR",
         subject: `New Referral Order for Dr. ${doctor.name} — ${order.name}`,
         htmlContent: buildOrderPaidEmailHtml({
           recipientRole: "MR",
