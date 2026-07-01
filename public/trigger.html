@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KLAB Referral Admin</title>
+  <style>
+    body { font-family: Arial, sans-serif; max-width: 600px; margin: 60px auto; padding: 20px; background: #f5f5f5; }
+    h1 { color: #1a1a1a; font-size: 22px; }
+    .card { background: white; border-radius: 8px; padding: 24px; margin-bottom: 20px; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
+    label { display: block; margin-bottom: 6px; font-weight: bold; font-size: 14px; }
+    input { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; box-sizing: border-box; margin-bottom: 16px; }
+    button { background: #2563eb; color: white; border: none; padding: 12px 24px; border-radius: 6px; font-size: 15px; cursor: pointer; width: 100%; }
+    button:hover { background: #1d4ed8; }
+    button:disabled { background: #93c5fd; cursor: not-allowed; }
+    .result { margin-top: 16px; padding: 12px; border-radius: 6px; font-size: 14px; white-space: pre-wrap; }
+    .success { background: #dcfce7; color: #166534; }
+    .error { background: #fee2e2; color: #991b1b; }
+    .info { background: #dbeafe; color: #1e40af; }
+  </style>
+</head>
+<body>
+  <h1>KLAB Nutra — Referral Admin</h1>
+
+  <div class="card">
+    <label>Vercel Base URL</label>
+    <input id="baseUrl" type="text" placeholder="https://doctor-referral-webhook-o1j7.vercel.app" value="https://doctor-referral-webhook-o1j7.vercel.app" />
+    
+    <label>Admin Secret</label>
+    <input id="secret" type="password" placeholder="Your ADMIN_SECRET" />
+
+    <button onclick="syncCodes()" id="syncBtn">🔄 Sync Discount Codes to Shopify</button>
+    <div id="syncResult"></div>
+  </div>
+
+  <script>
+    async function syncCodes() {
+      const baseUrl = document.getElementById('baseUrl').value.trim();
+      const secret = document.getElementById('secret').value.trim();
+      const btn = document.getElementById('syncBtn');
+      const result = document.getElementById('syncResult');
+
+      if (!secret) {
+        result.className = 'result error';
+        result.textContent = 'Please enter your Admin Secret';
+        return;
+      }
+
+      btn.disabled = true;
+      btn.textContent = '⏳ Syncing... this may take a minute';
+      result.className = 'result info';
+      result.textContent = 'Running sync — please wait...';
+
+      try {
+        const response = await fetch(`${baseUrl}/api/sync-discount-codes`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-admin-secret': secret
+          }
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+          result.className = 'result success';
+          result.textContent = `✓ Sync complete!\n\nCreated: ${data.created}\nSkipped (already exist): ${data.skipped}\nFailed: ${data.failed}\n\n${data.failed_details?.length ? 'Failed codes:\n' + JSON.stringify(data.failed_details, null, 2) : ''}`;
+        } else {
+          result.className = 'result error';
+          result.textContent = `✗ Error: ${JSON.stringify(data, null, 2)}`;
+        }
+      } catch (err) {
+        result.className = 'result error';
+        result.textContent = `✗ Network error: ${err.message}`;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = '🔄 Sync Discount Codes to Shopify';
+      }
+    }
+  </script>
+</body>
+</html>
