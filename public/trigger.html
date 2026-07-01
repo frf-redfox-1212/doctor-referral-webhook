@@ -13,69 +13,76 @@
     button { background: #2563eb; color: white; border: none; padding: 12px 24px; border-radius: 6px; font-size: 15px; cursor: pointer; width: 100%; }
     button:hover { background: #1d4ed8; }
     button:disabled { background: #93c5fd; cursor: not-allowed; }
-    .result { margin-top: 16px; padding: 12px; border-radius: 6px; font-size: 14px; white-space: pre-wrap; }
+    .result { margin-top: 16px; padding: 12px; border-radius: 6px; font-size: 13px; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
     .success { background: #dcfce7; color: #166534; }
     .error { background: #fee2e2; color: #991b1b; }
     .info { background: #dbeafe; color: #1e40af; }
+    .progress { background: #f3f4f6; border-radius: 6px; height: 12px; margin: 12px 0; overflow: hidden; }
+    .progress-bar { background: #2563eb; height: 100%; transition: width 0.3s; }
   </style>
 </head>
 <body>
   <h1>KLAB Nutra — Referral Admin</h1>
-
   <div class="card">
-    <label>Vercel Base URL</label>
-    <input id="baseUrl" type="text" placeholder="https://doctor-referral-webhook-o1j7.vercel.app" value="https://doctor-referral-webhook-o1j7.vercel.app" />
-    
     <label>Admin Secret</label>
     <input id="secret" type="password" placeholder="Your ADMIN_SECRET" />
-
-    <button onclick="syncCodes()" id="syncBtn">🔄 Sync Discount Codes to Shopify</button>
+    <label>Batch Size (codes per request)</label>
+    <input id="batchSize" type="number" value="200" />
+    <button onclick="startSync()" id="syncBtn">🔄 Sync All Discount Codes to Shopify</button>
+    <div class="progress" id="progressBar" style="display:none">
+      <div class="progress-bar" id="progressFill" style="width:0%"></div>
+    </div>
     <div id="syncResult"></div>
   </div>
-
   <script>
-    async function syncCodes() {
-      const baseUrl = document.getElementById('baseUrl').value.trim();
+    let running = false;
+    async function startSync() {
+      if (running) return;
       const secret = document.getElementById('secret').value.trim();
+      const batchSize = parseInt(document.getElementById('batchSize').value) || 200;
       const btn = document.getElementById('syncBtn');
       const result = document.getElementById('syncResult');
-
-      if (!secret) {
-        result.className = 'result error';
-        result.textContent = 'Please enter your Admin Secret';
-        return;
-      }
-
+      const progressBar = document.getElementById('progressBar');
+      const progressFill = document.getElementById('progressFill');
+      if (!secret) { result.className = 'result error'; result.textContent = 'Please enter your Admin Secret'; return; }
+      running = true;
       btn.disabled = true;
-      btn.textContent = '⏳ Syncing... this may take a minute';
-      result.className = 'result info';
-      result.textContent = 'Running sync — please wait...';
-
-      try {
-        const response = await fetch(`${baseUrl}/api/sync-discount-codes`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-admin-secret': secret
+      progressBar.style.display = 'block';
+      let offset = 0, totalCreated = 0, totalSkipped = 0, totalFailed = 0, totalCodes = null, log = '';
+      while (true) {
+        result.className = 'result info';
+        result.textContent = `⏳ Processing batch at offset ${offset}...\n\n${log}`;
+        try {
+          const response = await fetch('/api/sync-discount-codes', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-admin-secret': secret },
+            body: JSON.stringify({ offset, limit: batchSize })
+          });
+          const data = await response.json();
+          if (!response.ok) { result.className = 'result error'; result.textContent = `✗ Error at offset ${offset}:\n${JSON.stringify(data, null, 2)}`; break; }
+          totalCreated += data.created;
+          totalSkipped += data.skipped;
+          totalFailed += data.failed;
+          totalCodes = data.total_codes;
+          offset = data.next_offset;
+          const pct = Math.round((offset / totalCodes) * 100);
+          progressFill.style.width = `${pct}%`;
+          log = `✓ Progress: ${offset}/${totalCodes} (${pct}%)\nCreated: ${totalCreated} | Skipped: ${totalSkipped} | Failed: ${totalFailed}`;
+          if (data.done) {
+            result.className = 'result success';
+            result.textContent = `✅ Sync complete!\n\nTotal: ${totalCodes}\nCreated: ${totalCreated}\nSkipped: ${totalSkipped}\nFailed: ${totalFailed}`;
+            progressFill.style.width = '100%';
+            break;
           }
-        });
-
-        const data = await response.json();
-
-        if (response.ok) {
-          result.className = 'result success';
-          result.textContent = `✓ Sync complete!\n\nCreated: ${data.created}\nSkipped (already exist): ${data.skipped}\nFailed: ${data.failed}\n\n${data.failed_details?.length ? 'Failed codes:\n' + JSON.stringify(data.failed_details, null, 2) : ''}`;
-        } else {
+          await new Promise(r => setTimeout(r, 500));
+        } catch (err) {
           result.className = 'result error';
-          result.textContent = `✗ Error: ${JSON.stringify(data, null, 2)}`;
+          result.textContent = `✗ Network error at offset ${offset}: ${err.message}\n\n${log}`;
+          break;
         }
-      } catch (err) {
-        result.className = 'result error';
-        result.textContent = `✗ Network error: ${err.message}`;
-      } finally {
-        btn.disabled = false;
-        btn.textContent = '🔄 Sync Discount Codes to Shopify';
       }
+      running = false;
+      btn.disabled = false;
     }
   </script>
 </body>
