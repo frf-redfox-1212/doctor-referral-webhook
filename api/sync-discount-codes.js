@@ -19,12 +19,12 @@ async function getShopifyToken() {
     `https://${process.env.SHOPIFY_STORE_DOMAIN}/admin/oauth/access_token`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
         client_id: process.env.SHOPIFY_CLIENT_ID,
         client_secret: process.env.SHOPIFY_CLIENT_SECRET,
         grant_type: "client_credentials",
-      }),
+      }).toString(),
     }
   );
 
