@@ -98,10 +98,18 @@ async function createDiscountCode(token, priceRuleId, code) {
     }
   );
 
+  // Rate limit — wait and signal caller to skip counting as failure
+  if (res.status === 429) {
+    await new Promise(r => setTimeout(r, 1000));
+    return { ratelimited: true };
+  }
+
   const data = await res.json();
 
   if (data.errors) {
-    if (JSON.stringify(data.errors).includes("taken")) {
+    const errStr = JSON.stringify(data.errors).toLowerCase();
+    // Already exists in Shopify — treat as skipped, not failed
+    if (errStr.includes("unique") || errStr.includes("taken") || errStr.includes("already")) {
       return { skipped: true };
     }
     throw new Error(`Failed to create code ${code}: ${JSON.stringify(data.errors)}`);
@@ -109,6 +117,9 @@ async function createDiscountCode(token, priceRuleId, code) {
 
   return { created: true };
 }
+
+// ── Sleep helper ─────────────────────────────────────────────────────────────
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ── Main handler ─────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
@@ -151,13 +162,21 @@ export default async function handler(req, res) {
       const priceRuleId = await getOrCreatePriceRule(token, rate);
       for (const c of rateCodes) {
         try {
-          const result = await createDiscountCode(token, priceRuleId, c.discount_code);
+          let result;
+          // Retry once on rate limit
+          result = await createDiscountCode(token, priceRuleId, c.discount_code);
+          if (result.ratelimited) {
+            await sleep(1000);
+            result = await createDiscountCode(token, priceRuleId, c.discount_code);
+          }
           if (result.skipped) results.skipped++;
-          else results.created++;
+          else if (result.created) results.created++;
         } catch (err) {
           console.error(err.message);
           results.failed.push({ code: c.discount_code, error: err.message });
         }
+        // Stay under Shopify's 2 calls/second limit
+        await sleep(600);
       }
     }
 
