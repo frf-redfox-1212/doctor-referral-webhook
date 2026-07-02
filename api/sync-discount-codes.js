@@ -1,9 +1,9 @@
 // api/sync-discount-codes.js
-// Reads active codes from Supabase doctor_codes table in batches
-// and creates matching discount codes in Shopify via Admin API.
+// Syncs ONLY unsynced codes (shopify_synced = false) to Shopify
+// Uses bulk code creation (up to 100 codes per API call) for speed
+// Marks codes as synced in Supabase after successful creation
 //
-// Call via POST with body: { "offset": 0, "limit": 200 }
-// Safe to re-run — skips codes that already exist in Shopify.
+// Call via POST — no body needed, it handles everything automatically
 
 import { createClient } from "@supabase/supabase-js";
 
@@ -11,6 +11,8 @@ const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
+
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ── Get Shopify access token ─────────────────────────────────────────────────
 async function getShopifyToken() {
@@ -26,17 +28,15 @@ async function getShopifyToken() {
       }).toString(),
     }
   );
-
   if (!response.ok) {
     const err = await response.text();
     throw new Error(`Token exchange failed: ${response.status} ${err}`);
   }
-
   const data = await response.json();
   return data.access_token;
 }
 
-// ── Get or create a Shopify price rule for a given discount % ───────────────
+// ── Get or create price rule for a given discount % ─────────────────────────
 async function getOrCreatePriceRule(token, discountPercent) {
   const domain = process.env.SHOPIFY_STORE_DOMAIN;
   const title = `Doctor Referral ${discountPercent}% Off`;
@@ -46,19 +46,13 @@ async function getOrCreatePriceRule(token, discountPercent) {
     { headers: { "X-Shopify-Access-Token": token } }
   );
   const listData = await listRes.json();
-
-  if (listData.price_rules && listData.price_rules.length > 0) {
-    return listData.price_rules[0].id;
-  }
+  if (listData.price_rules?.length > 0) return listData.price_rules[0].id;
 
   const createRes = await fetch(
     `https://${domain}/admin/api/2024-04/price_rules.json`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": token,
-      },
+      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
       body: JSON.stringify({
         price_rule: {
           title,
@@ -74,52 +68,38 @@ async function getOrCreatePriceRule(token, discountPercent) {
       }),
     }
   );
-
   const createData = await createRes.json();
-  if (!createData.price_rule) {
-    throw new Error(`Failed to create price rule: ${JSON.stringify(createData)}`);
-  }
+  if (!createData.price_rule) throw new Error(`Failed to create price rule: ${JSON.stringify(createData)}`);
   return createData.price_rule.id;
 }
 
-// ── Create a single discount code ───────────────────────────────────────────
-async function createDiscountCode(token, priceRuleId, code) {
+// ── Bulk create up to 100 codes under a price rule ──────────────────────────
+async function bulkCreateCodes(token, priceRuleId, codes) {
   const domain = process.env.SHOPIFY_STORE_DOMAIN;
 
   const res = await fetch(
-    `https://${domain}/admin/api/2024-04/price_rules/${priceRuleId}/discount_codes.json`,
+    `https://${domain}/admin/api/2024-04/price_rules/${priceRuleId}/batch_discount_codes.json`,
     {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Shopify-Access-Token": token,
-      },
-      body: JSON.stringify({ discount_code: { code } }),
+      headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
+      body: JSON.stringify({
+        codes: codes.map(code => ({ code }))
+      }),
     }
   );
 
-  // Rate limit — wait and signal caller to skip counting as failure
   if (res.status === 429) {
-    await new Promise(r => setTimeout(r, 1000));
-    return { ratelimited: true };
+    await sleep(2000);
+    return bulkCreateCodes(token, priceRuleId, codes); // retry once
   }
 
-  const data = await res.json();
-
-  if (data.errors) {
-    const errStr = JSON.stringify(data.errors).toLowerCase();
-    // Already exists in Shopify — treat as skipped, not failed
-    if (errStr.includes("unique") || errStr.includes("taken") || errStr.includes("already")) {
-      return { skipped: true };
-    }
-    throw new Error(`Failed to create code ${code}: ${JSON.stringify(data.errors)}`);
+  if (!res.ok) {
+    const err = await res.text();
+    throw new Error(`Bulk create failed: ${res.status} ${err}`);
   }
 
-  return { created: true };
+  return await res.json(); // returns a batch job
 }
-
-// ── Sleep helper ─────────────────────────────────────────────────────────────
-const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 // ── Main handler ─────────────────────────────────────────────────────────────
 export default async function handler(req, res) {
@@ -133,22 +113,33 @@ export default async function handler(req, res) {
   }
 
   try {
-    const offset = parseInt(req.body?.offset ?? 0);
-    const limit = parseInt(req.body?.limit ?? 200);
+    const limit = parseInt(req.body?.limit ?? 500);
 
-    console.log(`Syncing codes offset=${offset} limit=${limit}`);
-
-    const token = await getShopifyToken();
-
+    // 1. Fetch unsynced codes from Supabase
     const { data: codes, error, count } = await supabase
       .from("doctor_codes")
-      .select("discount_code, customer_discount_rate, valid_until", { count: "exact" })
+      .select("id, discount_code, customer_discount_rate", { count: "exact" })
       .eq("active", true)
+      .eq("shopify_synced", false)
       .order("created_at", { ascending: true })
-      .range(offset, offset + limit - 1);
+      .limit(limit);
 
     if (error) throw new Error(`Supabase fetch failed: ${error.message}`);
 
+    if (!codes || codes.length === 0) {
+      return res.status(200).json({
+        message: "All codes already synced!",
+        remaining: 0,
+        done: true,
+      });
+    }
+
+    console.log(`Syncing ${codes.length} unsynced codes (${count} total remaining)`);
+
+    // 2. Get Shopify token
+    const token = await getShopifyToken();
+
+    // 3. Group by discount %
     const byRate = {};
     for (const c of codes) {
       const rate = parseFloat(c.customer_discount_rate);
@@ -156,40 +147,51 @@ export default async function handler(req, res) {
       byRate[rate].push(c);
     }
 
-    const results = { created: 0, skipped: 0, failed: [] };
+    const successIds = [];
+    const failed = [];
 
+    // 4. Bulk create in chunks of 100 per API call
     for (const [rate, rateCodes] of Object.entries(byRate)) {
       const priceRuleId = await getOrCreatePriceRule(token, rate);
-      for (const c of rateCodes) {
+
+      // Split into chunks of 100
+      for (let i = 0; i < rateCodes.length; i += 100) {
+        const chunk = rateCodes.slice(i, i + 100);
+        const codeStrings = chunk.map(c => c.discount_code);
+
         try {
-          let result;
-          // Retry once on rate limit
-          result = await createDiscountCode(token, priceRuleId, c.discount_code);
-          if (result.ratelimited) {
-            await sleep(1000);
-            result = await createDiscountCode(token, priceRuleId, c.discount_code);
-          }
-          if (result.skipped) results.skipped++;
-          else if (result.created) results.created++;
+          await bulkCreateCodes(token, priceRuleId, codeStrings);
+          successIds.push(...chunk.map(c => c.id));
+          console.log(`Bulk created ${chunk.length} codes`);
         } catch (err) {
-          console.error(err.message);
-          results.failed.push({ code: c.discount_code, error: err.message });
+          console.error(`Bulk create error: ${err.message}`);
+          failed.push(...codeStrings);
         }
-        // Stay under Shopify's 2 calls/second limit
-        await sleep(600);
+
+        await sleep(600); // stay under rate limit between bulk calls
       }
     }
 
+    // 5. Mark successfully created codes as synced in Supabase
+    if (successIds.length > 0) {
+      const { error: updateError } = await supabase
+        .from("doctor_codes")
+        .update({ shopify_synced: true })
+        .in("id", successIds);
+
+      if (updateError) {
+        console.error("Failed to mark codes as synced:", updateError);
+      }
+    }
+
+    const remaining = count - successIds.length;
+
     return res.status(200).json({
       message: "Batch complete",
-      offset,
-      limit,
-      total_codes: count,
-      next_offset: offset + codes.length,
-      done: offset + codes.length >= count,
-      created: results.created,
-      skipped: results.skipped,
-      failed: results.failed.length,
+      synced: successIds.length,
+      failed: failed.length,
+      remaining,
+      done: remaining <= 0,
     });
 
   } catch (err) {
