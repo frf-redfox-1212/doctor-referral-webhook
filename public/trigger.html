@@ -111,23 +111,35 @@
       if (!secret) { result.className = 'result error'; result.textContent = 'Enter Admin Secret'; return; }
 
       running = true; btn.disabled = true;
-      result.className = 'result info';
-      result.textContent = '⏳ Fetching all codes from Shopify and verifying...\nThis may take a few minutes.';
+      let offset = 0, totalSynced = 0, totalUnsynced = 0;
 
-      try {
-        const res = await fetch('/api/verify-shopify-sync', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-admin-secret': secret },
-        });
-        const data = await res.json();
-        if (!res.ok) { result.className = 'result error'; result.textContent = `✗ Error:\n${JSON.stringify(data, null, 2)}`; }
-        else {
-          result.className = 'result success';
-          result.textContent = `✅ Verification complete!\n\nCodes in Shopify: ${data.shopify_total}\nMarked synced in Supabase: ${data.marked_synced}\nNot in Shopify (will sync next run): ${data.not_in_shopify}`;
+      while (true) {
+        result.className = 'result info';
+        result.textContent = `⏳ Verifying... processed ${offset} codes\nSynced: ${totalSynced} | Not in Shopify: ${totalUnsynced}`;
+        try {
+          const res = await fetch('/api/verify-shopify-sync', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'x-admin-secret': secret },
+            body: JSON.stringify({ offset })
+          });
+          const data = await res.json();
+          if (!res.ok) { result.className = 'result error'; result.textContent = `✗ Error:\n${JSON.stringify(data, null, 2)}`; break; }
+
+          totalSynced += data.synced_this_batch;
+          totalUnsynced += data.unsynced_this_batch;
+          offset = data.next_offset;
+
+          if (data.done) {
+            result.className = 'result success';
+            result.textContent = `✅ Verification complete!\n\nCodes in Shopify: ${data.shopify_total}\nTotal processed: ${data.total}\nMarked synced: ${totalSynced}\nNot in Shopify: ${totalUnsynced}`;
+            break;
+          }
+          await new Promise(r => setTimeout(r, 300));
+        } catch (err) {
+          result.className = 'result error';
+          result.textContent = `✗ Error: ${err.message}\nProcessed so far: ${offset}`;
+          break;
         }
-      } catch (err) {
-        result.className = 'result error';
-        result.textContent = `✗ Error: ${err.message}`;
       }
       running = false; btn.disabled = false;
     }
