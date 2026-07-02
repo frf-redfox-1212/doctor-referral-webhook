@@ -77,20 +77,19 @@ async function getOrCreatePriceRule(token, discountPercent) {
 async function bulkCreateCodes(token, priceRuleId, codes) {
   const domain = process.env.SHOPIFY_STORE_DOMAIN;
 
+  // Submit batch job
   const res = await fetch(
     `https://${domain}/admin/api/2024-04/price_rules/${priceRuleId}/batch_discount_codes.json`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Shopify-Access-Token": token },
-      body: JSON.stringify({
-        codes: codes.map(code => ({ code }))
-      }),
+      body: JSON.stringify({ codes: codes.map(code => ({ code })) }),
     }
   );
 
   if (res.status === 429) {
     await sleep(2000);
-    return bulkCreateCodes(token, priceRuleId, codes); // retry once
+    return bulkCreateCodes(token, priceRuleId, codes);
   }
 
   if (!res.ok) {
@@ -98,7 +97,26 @@ async function bulkCreateCodes(token, priceRuleId, codes) {
     throw new Error(`Bulk create failed: ${res.status} ${err}`);
   }
 
-  return await res.json(); // returns a batch job
+  const data = await res.json();
+  const batchId = data.discount_code_creation?.id;
+  if (!batchId) throw new Error(`No batch ID returned: ${JSON.stringify(data)}`);
+
+  // Poll until batch job completes
+  let attempts = 0;
+  while (attempts < 10) {
+    await sleep(1000);
+    const pollRes = await fetch(
+      `https://${domain}/admin/api/2024-04/price_rules/${priceRuleId}/batch/${batchId}.json`,
+      { headers: { "X-Shopify-Access-Token": token } }
+    );
+    const pollData = await pollRes.json();
+    const status = pollData.discount_code_creation?.status;
+    if (status === "completed") return pollData;
+    if (status === "failed") throw new Error(`Batch job failed: ${JSON.stringify(pollData)}`);
+    attempts++;
+  }
+
+  return data; // return even if still running after 10 attempts
 }
 
 // ── Main handler ─────────────────────────────────────────────────────────────
