@@ -66,7 +66,6 @@ function buildOrderPaidEmailHtml({ recipientRole, doctorName, mrName, orderNumbe
   if (recipientRole === "Doctor") {
     return `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333;">
-      <p><strong>Subject: KLAB Nutra Loyalty Program ${orderNumber}</strong></p>
       <p>Dear Dr. <strong>${doctorName}</strong>,</p>
       <p>We note from our records that you have recently prescribed our prestige product. This communication is to express our heartfelt gratitude for your trust and recommendation.</p>
       <p>Please find the details of your prescription below:</p>
@@ -102,7 +101,6 @@ function buildOrderPaidEmailHtml({ recipientRole, doctorName, mrName, orderNumbe
   // MR email
   return `
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333;">
-      <p><strong>Subject: Prescription alert from your doctor ${orderNumber}</strong></p>
       <p>Dear Mr <strong>${mrName || "MR"}</strong>,</p>
       <p>We understand from our records that an online order has been received for a prescription written by a doctor Dr. <strong>${doctorName}</strong> on your prescriber list. The order is currently being processed and will soon be delivered to the patient <strong>${customerName || "the patient"}</strong>.</p>
       <p><strong>Please find the Order & Prescription Details below:</strong></p>
