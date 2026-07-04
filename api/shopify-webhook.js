@@ -61,23 +61,79 @@ async function sendEmail({ to, toName, subject, htmlContent }) {
 }
 
 // ── Build "order paid" notification email ───────────────────────────────────
-function buildOrderPaidEmailHtml({ recipientRole, doctorName, orderNumber, untaxedAmount, rate, payoutAmount, customerName, orderType }) {
-  const orderTypeLabel = orderType === "first" ? "First order (code used)" : "Repeat order (no code needed)";
-  return `
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
-      <h2>New Referral Order — ${recipientRole}</h2>
-      <p>An order has been placed for <strong>Dr. ${doctorName}</strong>'s patient.</p>
+function buildOrderPaidEmailHtml({ recipientRole, doctorName, mrName, orderNumber, untaxedAmount, rate, payoutAmount, customerName, orderType, discountCode, orderItems }) {
+
+  if (recipientRole === "Doctor") {
+    return `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333;">
+      <p><strong>Subject: KLAB Nutra Loyalty Program ${orderNumber}</strong></p>
+      <p>Dear Dr. <strong>${doctorName}</strong>,</p>
+      <p>We note from our records that you have recently prescribed our prestige product. This communication is to express our heartfelt gratitude for your trust and recommendation.</p>
+      <p>Please find the details of your prescription below:</p>
       <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Order</strong></td><td style="padding:8px;border:1px solid #ddd;">${orderNumber}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Order Type</strong></td><td style="padding:8px;border:1px solid #ddd;">${orderTypeLabel}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Customer</strong></td><td style="padding:8px;border:1px solid #ddd;">${customerName || "N/A"}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Order Value (untaxed)</strong></td><td style="padding:8px;border:1px solid #ddd;">₹${untaxedAmount}</td></tr>
-        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Your Rate</strong></td><td style="padding:8px;border:1px solid #ddd;">${rate}%</td></tr>
-        <tr><td style="padding:8px;border:1px solid #ddd;"><strong>Your Referral Amount</strong></td><td style="padding:8px;border:1px solid #ddd;">₹${payoutAmount}</td></tr>
+        <thead>
+          <tr style="background:#f5f5f5;">
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Sr. no</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Product Name</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Quantity</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${orderItems && orderItems.length > 0
+            ? orderItems.map((item, idx) => `
+          <tr>
+            <td style="padding:8px;border:1px solid #ddd;">${idx + 1}</td>
+            <td style="padding:8px;border:1px solid #ddd;">${item.name}</td>
+            <td style="padding:8px;border:1px solid #ddd;">${item.quantity}</td>
+          </tr>`).join('')
+            : `<tr>
+            <td style="padding:8px;border:1px solid #ddd;">1</td>
+            <td style="padding:8px;border:1px solid #ddd;">—</td>
+            <td style="padding:8px;border:1px solid #ddd;">—</td>
+          </tr>`}
+        </tbody>
       </table>
-      <p style="color:#666;font-size:13px;">This referral amount will be eligible for payout 15 days after delivery is confirmed. This is an automated notification.</p>
-    </div>
-  `;
+      <p>We are pleased to inform you that based on your prescription generated the patient <strong>${customerName || "your patient"}</strong> will avail of a 10% discount on purchase price when he uses the KLAB Nutra coupon code provided by you.</p>
+      <p>We once again thank you for your patronage and look forward to a long association with you.</p>
+      <p style="color:#666;font-size:12px;">Order: ${orderNumber} | Referral Amount: ₹${payoutAmount}</p>
+    </div>`;
+  }
+
+  // MR email
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333;">
+      <p><strong>Subject: Prescription alert from your doctor ${orderNumber}</strong></p>
+      <p>Dear Mr <strong>${mrName || "MR"}</strong>,</p>
+      <p>We understand from our records that an online order has been received for a prescription written by a doctor Dr. <strong>${doctorName}</strong> on your prescriber list. The order is currently being processed and will soon be delivered to the patient <strong>${customerName || "the patient"}</strong>.</p>
+      <p><strong>Please find the Order & Prescription Details below:</strong></p>
+      <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+        <thead>
+          <tr style="background:#f5f5f5;">
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Sr no.</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Product Ordered</th>
+            <th style="padding:8px;border:1px solid #ddd;text-align:left;">Quantity</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${orderItems && orderItems.length > 0
+            ? orderItems.map((item, idx) => `
+          <tr>
+            <td style="padding:8px;border:1px solid #ddd;">${idx + 1}</td>
+            <td style="padding:8px;border:1px solid #ddd;">${item.name}</td>
+            <td style="padding:8px;border:1px solid #ddd;">${item.quantity}</td>
+          </tr>`).join('')
+            : `<tr>
+            <td style="padding:8px;border:1px solid #ddd;">1</td>
+            <td style="padding:8px;border:1px solid #ddd;">—</td>
+            <td style="padding:8px;border:1px solid #ddd;">—</td>
+          </tr>`}
+        </tbody>
+      </table>
+      <p>You are now advised to meet up with doctor and convey heartfelt thanks to him for his patronage.</p>
+      <p>You are also advised to explain the procedure of honorarium and thereby collect the Dr account details and enter them in the Rxcer portal in the provided format. Remember all the details in the Rxcer must be obtained and uploaded.</p>
+      <p>Please note the above details are necessary for completion of Honorarium formalities. Besides, please be informed that your incentive for this transaction will be done only after the complete details of the doctor are entered.</p>
+      <p style="color:#666;font-size:12px;">Order: ${orderNumber} | Your Incentive Amount: ₹${payoutAmount}</p>
+    </div>`;
 }
 
 // ── Main handler ─────────────────────────────────────────────────────────────
@@ -282,22 +338,31 @@ export default async function handler(req, res) {
     `Referral logged (${orderType}) — Doctor: ${doctor.name}, Order: ${order.name}, Untaxed: ${untaxedAmount}`
   );
 
-  // 7. Email the doctor (best-effort — don't fail the webhook if email fails)
+  // 7. Extract line items from order for the product table
+  const orderItems = (order.line_items || []).map(item => ({
+    name: item.title,
+    quantity: item.quantity,
+  }));
+
+  // 8. Email the doctor (best-effort — don't fail the webhook if email fails)
   try {
     if (doctor.email) {
       await sendEmail({
         to: doctor.email,
         toName: doctor.name,
-        subject: `New Referral Order — ${order.name}`,
+        subject: `KLAB Nutra Loyalty Program ${order.name}`,
         htmlContent: buildOrderPaidEmailHtml({
           recipientRole: "Doctor",
           doctorName: doctor.name,
+          mrName: doctor.mrs?.name,
           orderNumber: order.name,
           untaxedAmount,
           rate: doctorRate,
           payoutAmount: doctorPayoutAmount,
           customerName,
           orderType,
+          discountCode: usedCode,
+          orderItems,
         }),
       });
     }
@@ -305,22 +370,25 @@ export default async function handler(req, res) {
     console.error("Doctor order-paid email failed:", err);
   }
 
-  // 8. Email the MR (if one is linked to this doctor)
+  // 9. Email the MR (if one is linked to this doctor)
   try {
     if (doctor.mrs?.email) {
       await sendEmail({
         to: doctor.mrs.email,
         toName: doctor.mrs.name || "MR",
-        subject: `New Referral Order for Dr. ${doctor.name} — ${order.name}`,
+        subject: `Prescription alert from your doctor ${order.name}`,
         htmlContent: buildOrderPaidEmailHtml({
           recipientRole: "MR",
           doctorName: doctor.name,
+          mrName: doctor.mrs?.name,
           orderNumber: order.name,
           untaxedAmount,
           rate: mrRate,
           payoutAmount: mrPayoutAmount,
           customerName,
           orderType,
+          discountCode: usedCode,
+          orderItems,
         }),
       });
     }
