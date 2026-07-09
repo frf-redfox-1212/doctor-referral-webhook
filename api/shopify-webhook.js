@@ -171,11 +171,11 @@ export default async function handler(req, res) {
 
   const orderValue = parseFloat(order.total_price);
 
-  // GST rate as a percentage (e.g. 18.00) — taken from Shopify's tax_lines.
-  // rate comes through as a decimal (0.18), so multiply by 100.
+  // GST rate as a percentage — sum all tax lines since Shopify splits CGST + SGST
+  // e.g. CGST 9% + SGST 9% = 18% total
   const taxLines = order.tax_lines || [];
   const gstPercent = taxLines.length > 0
-    ? parseFloat(taxLines[0].rate) * 100
+    ? taxLines.reduce((sum, line) => sum + parseFloat(line.rate) * 100, 0)
     : null;
 
   if (!customerEmail) {
