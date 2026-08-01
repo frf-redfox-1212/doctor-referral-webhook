@@ -25,25 +25,21 @@ export async function getCashfreeToken() {
     "Content-Type": "application/json",
   };
 
-  // In TEST mode, all IPs are auto-whitelisted — no signature needed
-  // In PROD mode, use public key signature for dynamic IPs
-  if (publicKey && process.env.CASHFREE_ENV === "PRODUCTION") {
+  // Generate signature using public key
+  if (publicKey) {
     const data = `${clientId}.${timestamp}`;
-    
-    // Cashfree requires RSA encryption with OAEP padding (SHA-1)
+
+    // PHP docs use openssl_public_encrypt = PKCS1 padding
     const signature = crypto
       .publicEncrypt(
         {
           key: publicKey,
-          padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
-          oaepHash: "sha1",
+          padding: crypto.constants.RSA_PKCS1_PADDING,
         },
         Buffer.from(data)
       )
       .toString("base64");
 
-    headers["X-Client-Id"] = clientId;
-    headers["X-Client-Secret"] = clientSecret;
     headers["X-Cf-Signature"] = signature;
     headers["X-Cf-Timestamp"] = timestamp.toString();
   }
