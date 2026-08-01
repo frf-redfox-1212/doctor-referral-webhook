@@ -25,16 +25,18 @@ export async function getCashfreeToken() {
     "Content-Type": "application/json",
   };
 
-  // If public key is available, use signature-based auth
-  if (publicKey) {
+  // In TEST mode, all IPs are auto-whitelisted — no signature needed
+  // In PROD mode, use public key signature for dynamic IPs
+  if (publicKey && process.env.CASHFREE_ENV === "PRODUCTION") {
     const data = `${clientId}.${timestamp}`;
     
-    // Cashfree uses their public key to encrypt the signature
+    // Cashfree requires RSA encryption with OAEP padding (SHA-1)
     const signature = crypto
       .publicEncrypt(
         {
           key: publicKey,
-          padding: crypto.constants.RSA_PKCS1_PADDING,
+          padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+          oaepHash: "sha1",
         },
         Buffer.from(data)
       )
