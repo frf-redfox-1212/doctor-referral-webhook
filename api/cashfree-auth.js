@@ -1,65 +1,27 @@
 // cashfree-auth.js
-// Shared Cashfree authentication using Public Key signature method
-// Used by register-all-beneficiaries.js and run-monthly-payouts.js
+// Cashfree authentication using official cashfree-sdk npm package
+// The SDK handles public key signature internally
 
-import crypto from "crypto";
+export const CASHFREE_ENV = process.env.CASHFREE_ENV === "PRODUCTION" ? "PROD" : "TEST";
 
-const CASHFREE_BASE = process.env.CASHFREE_ENV === "PRODUCTION"
-  ? "https://payout-api.cashfree.com"
-  : "https://payout-gamma.cashfree.com";
-
-export { CASHFREE_BASE };
-
-// ── Get Cashfree auth token using Public Key signature ───────────────────────
 export async function getCashfreeToken() {
-  const clientId = process.env.CASHFREE_CLIENT_ID;
-  const clientSecret = process.env.CASHFREE_CLIENT_SECRET;
-  const publicKey = process.env.CASHFREE_PUBLIC_KEY;
+  const { Payouts } = await import("cashfree-sdk");
 
-  // Generate timestamp
-  const timestamp = Math.floor(Date.now() / 1000);
-
-  let headers = {
-    "X-Client-Id": clientId,
-    "X-Client-Secret": clientSecret,
-    "Content-Type": "application/json",
-  };
-
-  // Generate signature using public key
-  if (publicKey) {
-    const data = `${clientId}.${timestamp}`;
-
-    // PHP docs use openssl_public_encrypt = PKCS1 padding
-    const signature = crypto
-      .publicEncrypt(
-        {
-          key: publicKey,
-          padding: crypto.constants.RSA_PKCS1_PADDING,
-        },
-        Buffer.from(data)
-      )
-      .toString("base64");
-
-    headers["X-Cf-Signature"] = signature;
-    headers["X-Cf-Timestamp"] = timestamp.toString();
-  }
-
-  const res = await fetch(`${CASHFREE_BASE}/payout/v1/authorize`, {
-    method: "POST",
-    headers,
+  await Payouts.Init({
+    env: CASHFREE_ENV,
+    clientId: process.env.CASHFREE_CLIENT_ID,
+    clientSecret: process.env.CASHFREE_CLIENT_SECRET,
+    publicKey: process.env.CASHFREE_PUBLIC_KEY || null,
   });
 
-  const responseText = await res.text();
-  let data;
-  try {
-    data = JSON.parse(responseText);
-  } catch {
-    throw new Error(`Cashfree auth response not JSON: ${responseText}`);
+  const tokenRes = await Payouts.GetToken();
+  if (tokenRes.status !== "SUCCESS") {
+    throw new Error(`Cashfree auth failed: ${JSON.stringify(tokenRes)}`);
   }
 
-  if (data.status !== "SUCCESS") {
-    throw new Error(`Cashfree auth failed: ${JSON.stringify(data)}`);
-  }
-
-  return data.data.token;
+  return tokenRes.data.token;
 }
+
+export const CASHFREE_BASE = process.env.CASHFREE_ENV === "PRODUCTION"
+  ? "https://payout-api.cashfree.com"
+  : "https://payout-gamma.cashfree.com";
