@@ -2,31 +2,14 @@
 // Registers all doctors with bank details who aren't yet registered with Cashfree
 
 import { createClient } from "@supabase/supabase-js";
+import { getCashfreeToken, CASHFREE_BASE } from "./cashfree-auth.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
-const CASHFREE_BASE = process.env.CASHFREE_ENV === "PRODUCTION"
-  ? "https://payout-api.cashfree.com"
-  : "https://payout-gamma.cashfree.com";
-
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
-
-async function getCashfreeToken() {
-  const res = await fetch(`${CASHFREE_BASE}/payout/v1/authorize`, {
-    method: "POST",
-    headers: {
-      "X-Client-Id": process.env.CASHFREE_CLIENT_ID,
-      "X-Client-Secret": process.env.CASHFREE_CLIENT_SECRET,
-      "Content-Type": "application/json",
-    },
-  });
-  const data = await res.json();
-  if (data.status !== "SUCCESS") throw new Error(`Cashfree auth failed: ${JSON.stringify(data)}`);
-  return data.data.token;
-}
 
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).json({ error: "Method not allowed" });
