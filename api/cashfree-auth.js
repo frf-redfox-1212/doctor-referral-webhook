@@ -5,21 +5,21 @@
 export const CASHFREE_ENV = process.env.CASHFREE_ENV === "PRODUCTION" ? "PROD" : "TEST";
 
 export async function getCashfreeToken() {
-  const { Payouts } = await import("cashfree-sdk");
+  const { Payouts } = await import("@cashfreepayments/cashfree-sdk");
 
-  await Payouts.Init({
+  const payoutsInstance = new Payouts({
     env: CASHFREE_ENV,
     clientId: process.env.CASHFREE_CLIENT_ID,
     clientSecret: process.env.CASHFREE_CLIENT_SECRET,
-    publicKey: process.env.CASHFREE_PUBLIC_KEY || null,
+    publicKey: process.env.CASHFREE_PUBLIC_KEY || undefined,
   });
 
-  const tokenRes = await Payouts.GetToken();
+  const tokenRes = await payoutsInstance.GetToken();
   if (tokenRes.status !== "SUCCESS") {
     throw new Error(`Cashfree auth failed: ${JSON.stringify(tokenRes)}`);
   }
 
-  return tokenRes.data.token;
+  return { token: tokenRes.data.token, instance: payoutsInstance };
 }
 
 export const CASHFREE_BASE = process.env.CASHFREE_ENV === "PRODUCTION"
