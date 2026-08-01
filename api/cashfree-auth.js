@@ -1,39 +1,57 @@
 // cashfree-auth.js
-// Cashfree Payouts authentication using @cashfreepayments/cashfree-sdk
-// Handles public key signature automatically for dynamic IPs
+// Cashfree REST authentication (SDK-free)
 
-import { createRequire } from "module";
-const require = createRequire(import.meta.url);
+import crypto from "crypto";
 
-export const CASHFREE_BASE = process.env.CASHFREE_ENV === "PRODUCTION"
-  ? "https://payout-api.cashfree.com"
-  : "https://payout-gamma.cashfree.com";
+export const CASHFREE_BASE =
+  process.env.CASHFREE_ENV === "PRODUCTION"
+    ? "https://payout-api.cashfree.com"
+    : "https://payout-gamma.cashfree.com";
 
-export async function getCashfreeInstance() {
-  const { Payouts } = require("@cashfreepayments/cashfree-sdk");
+function generateSignature() {
+  const publicKey = process.env.CASHFREE_PUBLIC_KEY;
 
-  const config = {
-    env: process.env.CASHFREE_ENV === "PRODUCTION" ? "PRODUCTION" : "TEST",
-    clientId: process.env.CASHFREE_CLIENT_ID,
-    clientSecret: process.env.CASHFREE_CLIENT_SECRET,
-  };
-
-  // Add public key if available (for dynamic IP environments like Vercel)
-  if (process.env.CASHFREE_PUBLIC_KEY) {
-    config.publicKey = process.env.CASHFREE_PUBLIC_KEY;
+  if (!publicKey) {
+    throw new Error("CASHFREE_PUBLIC_KEY is missing");
   }
 
-  const payoutsInstance = new Payouts(config);
-  return payoutsInstance;
+  const timestamp = Math.floor(Date.now() / 1000);
+  const plainText = `${process.env.CASHFREE_CLIENT_ID}.${timestamp}`;
+
+  const encrypted = crypto.publicEncrypt(
+    {
+      key: publicKey,
+      padding: crypto.constants.RSA_PKCS1_OAEP_PADDING,
+    },
+    Buffer.from(plainText)
+  );
+
+  return encrypted.toString("base64");
 }
 
 export async function getCashfreeToken() {
-  const instance = await getCashfreeInstance();
-  const tokenRes = await instance.getToken();
-  
-  if (tokenRes.status !== "SUCCESS") {
-    throw new Error(`Cashfree auth failed: ${JSON.stringify(tokenRes)}`);
+  const signature = generateSignature();
+
+  console.log("Requesting Cashfree auth token...");
+
+  const response = await fetch(`${CASHFREE_BASE}/payout/v1/authorize`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Client-Id": process.env.CASHFREE_CLIENT_ID,
+      "X-Client-Secret": process.env.CASHFREE_CLIENT_SECRET,
+      "X-Cf-Signature": signature,
+    },
+    body: JSON.stringify({}),
+  });
+
+  const data = await response.json();
+
+  console.log("Cashfree auth response:", JSON.stringify(data));
+
+  if (!response.ok || data.status !== "SUCCESS") {
+    throw new Error(JSON.stringify(data));
   }
 
-  return tokenRes.data.token;
+  return data.data.token;
 }
