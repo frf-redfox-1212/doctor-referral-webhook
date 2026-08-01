@@ -28,8 +28,10 @@ export async function getCashfreeToken() {
   // If public key is available, use signature-based auth
   if (publicKey) {
     const data = `${clientId}.${timestamp}`;
+    
+    // Cashfree uses their public key to encrypt the signature
     const signature = crypto
-      .privateEncrypt(
+      .publicEncrypt(
         {
           key: publicKey,
           padding: crypto.constants.RSA_PKCS1_PADDING,
