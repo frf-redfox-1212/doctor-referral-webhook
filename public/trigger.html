@@ -47,8 +47,21 @@
     <div id="syncResult"></div>
   </div>
 
-  <!-- Verify synced codes -->
+  <!-- Register Beneficiaries -->
   <div class="card">
+    <h2>🏦 Register Doctor Bank Details with Cashfree</h2>
+    <p style="font-size:13px;color:#666;margin:0 0 16px">Registers all doctors who have bank details but aren't yet registered with Cashfree.</p>
+    <button class="btn-blue" onclick="registerBeneficiaries()" id="regBtn">Register All Unregistered Doctors</button>
+    <div id="regResult"></div>
+  </div>
+
+  <!-- Run Payouts -->
+  <div class="card">
+    <h2>💸 Run Monthly Payouts</h2>
+    <p style="font-size:13px;color:#666;margin:0 0 16px">Manually trigger monthly payouts for all eligible doctors. Runs automatically on the 1st of each month.</p>
+    <button class="btn-green" onclick="runPayouts()" id="payoutBtn">Run Payouts Now</button>
+    <div id="payoutResult"></div>
+  </div>
     <h2>✅ Verify & Update Sync Status</h2>
     <p style="font-size:13px;color:#666;margin:0 0 16px">Checks Shopify for all existing codes and updates shopify_synced in Supabase. Run this after overnight sync.</p>
     <button class="btn-green" onclick="verifySync()" id="verifyBtn">Verify Sync Status</button>
@@ -103,7 +116,66 @@
       running = false; btn.disabled = false;
     }
 
-    async function verifySync() {
+    async function registerBeneficiaries() {
+      if (running) return;
+      const secret = document.getElementById('secret').value.trim();
+      const btn = document.getElementById('regBtn');
+      const result = document.getElementById('regResult');
+      if (!secret) { result.className = 'result error'; result.textContent = 'Enter Admin Secret'; return; }
+
+      running = true; btn.disabled = true;
+      result.className = 'result info';
+      result.textContent = '⏳ Fetching unregistered doctors...';
+
+      try {
+        // Get all doctors with bank details not yet registered
+        const res = await fetch('/api/register-all-beneficiaries', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-admin-secret': secret },
+        });
+        const data = await res.json();
+        if (!res.ok) { result.className = 'result error'; result.textContent = `✗ Error:\n${JSON.stringify(data, null, 2)}`; }
+        else {
+          result.className = 'result success';
+          result.textContent = `✅ Registration complete!\n\nRegistered: ${data.registered}\nAlready registered: ${data.already_registered}\nFailed: ${data.failed}\n\n${data.failed_details?.length ? 'Failed:\n' + data.failed_details.map(f => f.doctor + ': ' + f.error).join('\n') : ''}`;
+        }
+      } catch (err) {
+        result.className = 'result error';
+        result.textContent = `✗ Error: ${err.message}`;
+      }
+      running = false; btn.disabled = false;
+    }
+
+    async function runPayouts() {
+      if (running) return;
+      const secret = document.getElementById('secret').value.trim();
+      const btn = document.getElementById('payoutBtn');
+      const result = document.getElementById('payoutResult');
+      if (!secret) { result.className = 'result error'; result.textContent = 'Enter Admin Secret'; return; }
+
+      if (!confirm('Are you sure you want to run payouts now? This will initiate real bank transfers.')) return;
+
+      running = true; btn.disabled = true;
+      result.className = 'result info';
+      result.textContent = '⏳ Processing payouts...';
+
+      try {
+        const res = await fetch('/api/run-monthly-payouts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-admin-secret': secret },
+        });
+        const data = await res.json();
+        if (!res.ok) { result.className = 'result error'; result.textContent = `✗ Error:\n${JSON.stringify(data, null, 2)}`; }
+        else {
+          result.className = 'result success';
+          result.textContent = `✅ Payout run complete!\n\nSuccessful: ${data.success}\nFailed: ${data.failed}\nSkipped (no bank details): ${data.skipped}\n\n${data.details?.failed?.length ? 'Failed:\n' + data.details.failed.map(f => f.doctor + ': ' + f.error).join('\n') : ''}`;
+        }
+      } catch (err) {
+        result.className = 'result error';
+        result.textContent = `✗ Error: ${err.message}`;
+      }
+      running = false; btn.disabled = false;
+    }
       if (running) return;
       const secret = document.getElementById('secret').value.trim();
       const btn = document.getElementById('verifyBtn');
