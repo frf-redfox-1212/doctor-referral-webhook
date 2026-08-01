@@ -176,6 +176,8 @@
       }
       running = false; btn.disabled = false;
     }
+
+    async function verifySync() {
       if (running) return;
       const secret = document.getElementById('secret').value.trim();
       const btn = document.getElementById('verifyBtn');
