@@ -108,7 +108,7 @@ export default async function handler(req, res) {
             transfer_id: transferId,
             transfer_amount: amount,
             beneficiary_id: bank.cashfree_beneficiary_id,
-            transfer_remarks: `KLAB Nutra referral payout — ${doc.doctor_unpaid_order_count} orders`,
+            transfer_remarks: `KLAB Nutra referral payout ${doc.doctor_unpaid_order_count} orders`,
           }),
         });
 
