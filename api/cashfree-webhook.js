@@ -95,24 +95,24 @@ export default async function handler(req, res) {
         .select("id", { count: "exact" })
         .eq("doctor_payout_id", payoutLog.id);
 
-      // Email doctor
-      try {
-        if (payoutLog.recipient_email) {
-          await sendEmail({
-            to: payoutLog.recipient_email,
-            toName: payoutLog.recipient_name,
-            subject: `Referral Honorarium Credited — ₹${payoutLog.total_payout}`,
-            htmlContent: buildPayoutEmailHtml({
-              doctorName: payoutLog.recipient_name,
-              amount: payoutLog.total_payout,
-              transferId,
-              referralCount: count || 0,
-            }),
-          });
-        }
-      } catch (emailErr) {
-        console.error("Payout email failed:", emailErr.message);
-      }
+      // Email doctor — disabled for now, enable when ready
+      // try {
+      //   if (payoutLog.recipient_email) {
+      //     await sendEmail({
+      //       to: payoutLog.recipient_email,
+      //       toName: payoutLog.recipient_name,
+      //       subject: `Referral Honorarium Credited — ₹${payoutLog.total_payout}`,
+      //       htmlContent: buildPayoutEmailHtml({
+      //         doctorName: payoutLog.recipient_name,
+      //         amount: payoutLog.total_payout,
+      //         transferId,
+      //         referralCount: count || 0,
+      //       }),
+      //     });
+      //   }
+      // } catch (emailErr) {
+      //   console.error("Payout email failed:", emailErr.message);
+      // }
 
       console.log(`✓ Payout confirmed for ${payoutLog.recipient_name} — ₹${payoutLog.total_payout}`);
 

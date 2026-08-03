@@ -1,14 +1,15 @@
 // api/register-all-beneficiaries.js
 // Registers all doctors with bank details who aren't yet registered with Cashfree
+// Calls the Oracle VM which has the static IP whitelisted with Cashfree
 
 import { createClient } from "@supabase/supabase-js";
-import { getCashfreeToken, CASHFREE_BASE } from "./cashfree-auth.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
+const CASHFREE_API_URL = process.env.CASHFREE_API_URL;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 export default async function handler(req, res) {
@@ -26,10 +27,16 @@ export default async function handler(req, res) {
 
     if (error) throw new Error(`Supabase error: ${error.message}`);
     if (!bankDetails || bankDetails.length === 0) {
-      return res.status(200).json({ message: "All doctors already registered", registered: 0, already_registered: 0, failed: 0 });
+      return res.status(200).json({ 
+        message: "All doctors already registered", 
+        registered: 0, 
+        already_registered: 0, 
+        failed: 0 
+      });
     }
 
-    const token = await getCashfreeToken();
+    console.log(`Found ${bankDetails.length} unregistered doctors`);
+
     let registered = 0, already_registered = 0;
     const failed_details = [];
 
@@ -40,29 +47,38 @@ export default async function handler(req, res) {
       const beneficiaryId = `KLAB_${doctor.id.replace(/-/g, '').substring(0, 16).toUpperCase()}`;
 
       try {
-        const regRes = await fetch(`${CASHFREE_BASE}/payout/v1/addBeneficiary`, {
+        // Call Oracle VM to register with Cashfree
+        const regRes = await fetch(`${CASHFREE_API_URL}/register-beneficiary`, {
           method: "POST",
-          headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+          headers: { 
+            "Content-Type": "application/json",
+            "x-admin-secret": process.env.ADMIN_SECRET,
+          },
           body: JSON.stringify({
-            beneId: beneficiaryId,
+            beneficiary_id: beneficiaryId,
             name: bank.account_holder_name,
             email: doctor.email || "noreply@klabnutra.com",
             phone: doctor.phone || "9999999999",
-            bankAccount: bank.bank_account,
-            ifsc: bank.bank_ifsc,
-            address1: "India",
+            bank_account_number: bank.bank_account,
+            bank_ifsc: bank.bank_ifsc,
           }),
         });
 
         const result = await regRes.json();
         console.log(`${doctor.name}:`, JSON.stringify(result));
 
-        if (result.status === "SUCCESS" || result.subCode === "409") {
+        if (regRes.ok && result.beneficiary_id) {
           await supabase.from("doctor_bank_details").update({
             cashfree_beneficiary_id: beneficiaryId,
             cashfree_registered: true,
           }).eq("id", bank.id);
-          result.subCode === "409" ? already_registered++ : registered++;
+          registered++;
+        } else if (result.error?.code === "beneficiary_already_exists") {
+          await supabase.from("doctor_bank_details").update({
+            cashfree_beneficiary_id: beneficiaryId,
+            cashfree_registered: true,
+          }).eq("id", bank.id);
+          already_registered++;
         } else {
           failed_details.push({ doctor: doctor.name, error: JSON.stringify(result) });
         }

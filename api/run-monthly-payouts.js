@@ -1,38 +1,36 @@
 // api/run-monthly-payouts.js
 // Runs automatically on 1st of every month via Vercel cron
 // OR manually triggered via POST with x-admin-secret header
-// Processes all eligible doctor payouts via Cashfree
+// Calls Oracle VM to process payouts via Cashfree
 
 import { createClient } from "@supabase/supabase-js";
-import { getCashfreeToken, CASHFREE_BASE } from "./cashfree-auth.js";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_KEY
 );
 
+const CASHFREE_API_URL = process.env.CASHFREE_API_URL;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-async function sendPayout(token, { transferId, beneficiaryId, amount, remarks }) {
-  const res = await fetch(`${CASHFREE_BASE}/payout/v1/requestTransfer`, {
+async function sendEmail({ to, toName, subject, htmlContent }) {
+  const res = await fetch("https://api.brevo.com/v3/smtp/email", {
     method: "POST",
     headers: {
-      "Authorization": `Bearer ${token}`,
       "Content-Type": "application/json",
+      "api-key": process.env.BREVO_API_KEY,
     },
     body: JSON.stringify({
-      beneId: beneficiaryId,
-      amount: amount.toFixed(2),
-      transferId,
-      transferMode: "banktransfer",
-      remarks,
+      sender: { name: process.env.SENDER_NAME || "KLAB Nutra", email: process.env.SENDER_EMAIL },
+      to: [{ email: to, name: toName }],
+      subject,
+      htmlContent,
     }),
   });
-  return await res.json();
+  if (!res.ok) throw new Error(`Brevo failed: ${await res.text()}`);
 }
 
 export default async function handler(req, res) {
-  // Allow both GET (cron) and POST (manual trigger)
   if (req.method === "POST") {
     const providedSecret = req.headers["x-admin-secret"];
     if (providedSecret !== process.env.ADMIN_SECRET) {
@@ -43,7 +41,7 @@ export default async function handler(req, res) {
   try {
     console.log("Starting monthly payout run...");
 
-    // 1. Get all doctors with eligible unpaid referrals + registered bank details
+    // Get all doctors with eligible unpaid referrals
     const { data: eligibleDoctors, error } = await supabase
       .from("unpaid_referrals")
       .select("doctor_id, doctor_name, doctor_email, doctor_total_owed, doctor_unpaid_order_count")
@@ -56,7 +54,6 @@ export default async function handler(req, res) {
 
     console.log(`Found ${eligibleDoctors.length} doctors with eligible payouts`);
 
-    const token = await getCashfreeToken();
     const results = { success: [], failed: [], skipped: [] };
     const now = new Date();
     const periodStart = new Date(now.getFullYear(), now.getMonth() - 1, 1).toISOString().split("T")[0];
@@ -78,7 +75,6 @@ export default async function handler(req, res) {
 
       const amount = parseFloat(doc.doctor_total_owed);
       const transferId = `KLAB_${doc.doctor_id.replace(/-/g, '').substring(0, 12).toUpperCase()}_${Date.now()}`;
-      const remarks = `KLAB Nutra referral payout — ${doc.doctor_unpaid_order_count} orders`;
 
       try {
         // Create payout_log entry
@@ -101,17 +97,25 @@ export default async function handler(req, res) {
 
         if (logError) throw new Error(`Failed to create payout log: ${logError.message}`);
 
-        // Send payout via Cashfree
-        const payoutResult = await sendPayout(token, {
-          transferId,
-          beneficiaryId: bank.cashfree_beneficiary_id,
-          amount,
-          remarks,
+        // Call Oracle VM to initiate transfer
+        const payoutRes = await fetch(`${CASHFREE_API_URL}/request-transfer`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-admin-secret": process.env.ADMIN_SECRET,
+          },
+          body: JSON.stringify({
+            transfer_id: transferId,
+            transfer_amount: amount,
+            beneficiary_id: bank.cashfree_beneficiary_id,
+            transfer_remarks: `KLAB Nutra referral payout — ${doc.doctor_unpaid_order_count} orders`,
+          }),
         });
 
-        console.log(`Cashfree payout result for ${doc.doctor_name}:`, JSON.stringify(payoutResult));
+        const payoutResult = await payoutRes.json();
+        console.log(`Payout result for ${doc.doctor_name}:`, JSON.stringify(payoutResult));
 
-        if (payoutResult.status === "SUCCESS") {
+        if (payoutRes.ok && payoutResult.status === "RECEIVED") {
           // Link referrals to this payout
           const { data: referrals } = await supabase
             .from("referrals")
@@ -128,20 +132,19 @@ export default async function handler(req, res) {
               .in("id", referrals.map(r => r.id));
           }
 
-          // Update payout log status
           await supabase.from("payout_log")
             .update({ status: "processing", paid_on: periodEnd })
             .eq("id", payoutLog.id);
 
           results.success.push({ doctor: doc.doctor_name, amount, transfer_id: transferId });
           console.log(`✓ Payout initiated for ${doc.doctor_name} — ₹${amount}`);
+
         } else {
           await supabase.from("payout_log")
             .update({ status: "failed", failure_reason: JSON.stringify(payoutResult) })
             .eq("id", payoutLog.id);
 
           results.failed.push({ doctor: doc.doctor_name, amount, error: JSON.stringify(payoutResult) });
-          console.error(`✗ Payout failed for ${doc.doctor_name}:`, payoutResult);
         }
 
       } catch (err) {
@@ -149,7 +152,7 @@ export default async function handler(req, res) {
         console.error(`✗ Error processing ${doc.doctor_name}:`, err.message);
       }
 
-      await sleep(500); // Rate limit between payouts
+      await sleep(500);
     }
 
     return res.status(200).json({
