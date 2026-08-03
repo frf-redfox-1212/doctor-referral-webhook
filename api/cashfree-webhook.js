@@ -116,7 +116,7 @@ export default async function handler(req, res) {
 
       console.log(`✓ Payout confirmed for ${payoutLog.recipient_name} — ₹${payoutLog.total_payout}`);
 
-    } else if (status === "FAILED" || status === "REVERSED") {
+    } else if (status === "FAILED" || status === "REVERSED" || status === "REJECTED") {
       await supabase.from("payout_log")
         .update({ status: "failed", failure_reason: status })
         .eq("id", payoutLog.id);
