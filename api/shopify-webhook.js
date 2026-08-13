@@ -346,6 +346,44 @@ export default async function handler(req, res) {
     `Referral logged (${orderType}) — Doctor: ${doctor.name}, Order: ${order.name}, Untaxed: ${untaxedAmount}`
   );
 
+  // 7. Auto-mark MR payout as Internal Salary (MR incentives paid via salary, not Cashfree)
+  try {
+    const { data: newReferral } = await supabase
+      .from("referrals")
+      .select("id")
+      .eq("shopify_order_id", String(order.id))
+      .single();
+
+    if (newReferral && doctor.mrs?.name) {
+      const { data: mrPayout } = await supabase
+        .from("payout_log")
+        .insert({
+          doctor_id: doctor.id,
+          recipient_type: "mr",
+          recipient_name: doctor.mrs.name,
+          recipient_email: doctor.mrs.email || null,
+          period_start: new Date().toISOString().split("T")[0],
+          period_end: new Date().toISOString().split("T")[0],
+          total_payout: mrPayoutAmount,
+          paid_on: new Date().toISOString().split("T")[0],
+          payment_method: "Internal Salary",
+          status: "paid",
+          notes: "MR incentive settled via internal salary",
+        })
+        .select()
+        .single();
+
+      if (mrPayout) {
+        await supabase
+          .from("referrals")
+          .update({ mr_payout_id: mrPayout.id })
+          .eq("id", newReferral.id);
+      }
+    }
+  } catch (mrErr) {
+    console.error("MR auto-payout marking failed:", mrErr.message);
+  }
+
   // 7. Extract line items from order for the product table
   const orderItems = (order.line_items || []).map(item => ({
     name: item.title,
