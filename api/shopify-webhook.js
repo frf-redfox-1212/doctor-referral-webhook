@@ -172,11 +172,18 @@ export default async function handler(req, res) {
   const orderValue = parseFloat(order.total_price);
 
   // GST rate as a percentage — sum all tax lines since Shopify splits CGST + SGST
-  // e.g. CGST 9% + SGST 9% = 18% total
   const taxLines = order.tax_lines || [];
   const gstPercent = taxLines.length > 0
     ? taxLines.reduce((sum, line) => sum + parseFloat(line.rate) * 100, 0)
     : null;
+
+  // Payment method — captures COD vs prepaid gateway
+  const paymentMethod = order.payment_gateway || order.payment_details?.method || "unknown";
+
+  // Payment confirmed timestamp + 7 day eligibility window
+  const paidAt = new Date();
+  const eligibleAt = new Date(paidAt);
+  eligibleAt.setDate(eligibleAt.getDate() + 7);
 
   if (!customerEmail) {
     return res.status(200).json({ message: "No customer email on order, skipping" });
@@ -325,6 +332,9 @@ export default async function handler(req, res) {
     doctor_referral_rate: doctorRate,
     mr_payout_amount: mrPayoutAmount,
     doctor_payout_amount: doctorPayoutAmount,
+    payment_method: paymentMethod,
+    paid_at: paidAt.toISOString(),
+    eligible_at: eligibleAt.toISOString(),
   });
 
   if (insertError) {
