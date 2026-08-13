@@ -346,7 +346,7 @@ export default async function handler(req, res) {
     `Referral logged (${orderType}) — Doctor: ${doctor.name}, Order: ${order.name}, Untaxed: ${untaxedAmount}`
   );
 
-  // 7. Auto-mark MR payout as Internal Salary (MR incentives paid via salary, not Cashfree)
+  // 7. Create MR payout log entry as unpaid (MR incentives tracked here for client visibility)
   try {
     const { data: newReferral } = await supabase
       .from("referrals")
@@ -365,10 +365,11 @@ export default async function handler(req, res) {
           period_start: new Date().toISOString().split("T")[0],
           period_end: new Date().toISOString().split("T")[0],
           total_payout: mrPayoutAmount,
-          paid_on: new Date().toISOString().split("T")[0],
           payment_method: "Internal Salary",
-          status: "paid",
-          notes: "MR incentive settled via internal salary",
+          status: "unpaid",
+          shopify_order_numbers: order.name,
+          discount_codes: usedCode || null,
+          notes: "MR incentive — to be settled via internal salary",
         })
         .select()
         .single();
@@ -381,7 +382,7 @@ export default async function handler(req, res) {
       }
     }
   } catch (mrErr) {
-    console.error("MR auto-payout marking failed:", mrErr.message);
+    console.error("MR payout log creation failed:", mrErr.message);
   }
 
   // 7. Extract line items from order for the product table

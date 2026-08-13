@@ -77,6 +77,18 @@ export default async function handler(req, res) {
       const transferId = `KLAB_${doc.doctor_id.replace(/-/g, '').substring(0, 12).toUpperCase()}_${Date.now()}`;
 
       try {
+        // Get referral details for payout log
+        const { data: referrals } = await supabase
+          .from("referrals")
+          .select("id, shopify_order_number, discount_code")
+          .eq("doctor_id", doc.doctor_id)
+          .eq("status", "delivered")
+          .is("doctor_payout_id", null)
+          .lte("eligible_at", now.toISOString());
+
+        const orderNumbers = referrals?.map(r => r.shopify_order_number).join(", ") || "";
+        const discountCodes = [...new Set(referrals?.map(r => r.discount_code).filter(Boolean))].join(", ") || "";
+
         // Create payout_log entry
         const { data: payoutLog, error: logError } = await supabase
           .from("payout_log")
@@ -91,6 +103,8 @@ export default async function handler(req, res) {
             payment_method: "Cashfree",
             status: "processing",
             cashfree_transfer_id: transferId,
+            shopify_order_numbers: orderNumbers,
+            discount_codes: discountCodes,
           })
           .select()
           .single();
@@ -116,15 +130,7 @@ export default async function handler(req, res) {
         console.log(`Payout result for ${doc.doctor_name}:`, JSON.stringify(payoutResult));
 
         if (payoutRes.ok && payoutResult.status === "RECEIVED") {
-          // Link referrals to this payout
-          const { data: referrals } = await supabase
-            .from("referrals")
-            .select("id")
-            .eq("doctor_id", doc.doctor_id)
-            .eq("status", "delivered")
-            .is("doctor_payout_id", null)
-            .lte("eligible_at", now.toISOString());
-
+          // Link referrals to this payout (already fetched above)
           if (referrals && referrals.length > 0) {
             await supabase
               .from("referrals")
